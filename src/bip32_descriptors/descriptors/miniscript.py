@@ -2541,11 +2541,17 @@ def parse(
             _built(state, built, context)
     _assert_no_trailing_text(expression, pos, built)
     node = built[0]
+    _assert_script(node)
+    return node
+
+
+def _assert_script(node: Miniscript) -> None:
+    """Refuse an expression that is no script: untyped, too large, not a "B"."""
+    _assert_typed(node)
     if not _has(node.properties, "B"):
         basic = "".join(sorted(node.properties & _t("BVKW")))
         err_msg = f"not a miniscript script: {node} is a {basic}, not a B"
         raise BTClibValueError(err_msg)
-    return node
 
 
 def _op(name: str) -> int:
@@ -3124,11 +3130,7 @@ def from_script(
     if decoder.pos != len(decoder.entries):
         err_msg = "not a miniscript: the script holds more than one expression"
         raise BTClibValueError(err_msg)
-    _assert_typed(node)
-    if not _has(node.properties, "B"):
-        basic = "".join(sorted(node.properties & _t("BVKW")))
-        err_msg = f"not a miniscript script: {node} is a {basic}, not a B"
-        raise BTClibValueError(err_msg)
+    _assert_script(node)
     return node
 
 
@@ -3203,6 +3205,18 @@ def _assert_sane(node: Miniscript, prv_keys: PrvKeys) -> None:
         raise BTClibValueError(f"{insane} is not sane: it repeats a public key")
     err_msg = f"{insane} is not sane: satisfying it may exceed the resource limits"
     raise BTClibValueError(err_msg)
+
+
+def _assert_sane_script(node: Miniscript) -> None:
+    """Refuse a miniscript built by hand that `parse` refuses without `prv_keys`.
+
+    A descriptor holding one would not parse back from its own text. With
+    no private key a key behind a hardened step is compared by its
+    expression, as `Miniscript.has_duplicate_keys` says, so `parse` with
+    `prv_keys` may still refuse what this accepts.
+    """
+    _assert_script(node)
+    _assert_sane(node, {})
 
 
 @dataclass(frozen=True)

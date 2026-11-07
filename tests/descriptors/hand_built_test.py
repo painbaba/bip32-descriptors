@@ -5,9 +5,10 @@
 """What `parse` never builds is refused when a descriptor is built by hand.
 
 A field of the wrong type, in every `Descriptor` fragment and in a
-`MultiA`, leaves as a `BTClibTypeError`. `TrDescriptor` and `MultiA` also
-refuse a value `parse` refuses, as a `BTClibValueError`. Issues
-btclib-org/bip32-descriptors#46 and btclib-org/bip32-descriptors#103.
+`MultiA`, leaves as a `BTClibTypeError`. `TrDescriptor`, `MiniscriptDescriptor`
+and `MultiA` also refuse a value `parse` refuses, as a `BTClibValueError`.
+Issues btclib-org/bip32-descriptors#46, btclib-org/bip32-descriptors#85 and
+btclib-org/bip32-descriptors#103.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ import pytest
 from btclib.exceptions import BTClibTypeError, BTClibValueError
 from btclib.key import PrvKeyData
 
-from bip32_descriptors.descriptors import miniscript, parse
+from bip32_descriptors.bip32 import derive, rootxprv_from_seed, xpub_from_xprv
+from bip32_descriptors.descriptors import at_index, miniscript, normalized, parse
 from bip32_descriptors.descriptors.descriptors import (
     AddrDescriptor,
     ComboDescriptor,
@@ -154,6 +156,130 @@ def test_a_tr_leaf_of_an_unknown_context_is_refused(
     with pytest.raises(BTClibValueError, match=err_msg) as e:
         TrDescriptor(_KEY, leaf)
     assert_secret_free(e.value, [spelling])
+
+
+_XPRV = rootxprv_from_seed(_RANDOM_HEX)
+_XPUB = xpub_from_xprv(_XPRV)
+_C2 = PrvKeyData(4).pub.sec.hex()
+# each with the fault `parse` names, its keys filled in per context
+_INSANE = [
+    ("and_v(v:pk({0}),pk({0}))", "it repeats a public key"),
+    ("and_v(v:pk({0}),or_i(1,1))", "malleable witnesses exist"),
+    ("older(1)", "witnesses without signature exist"),
+    (
+        "and_v(v:pk({0}),and_v(v:older(1),older(4194305)))",
+        "it mixes timelocks expressed in blocks and in seconds",
+    ),
+    ("and_v(v:pk({0}),0)", "is not satisfiable"),
+]
+
+
+@pytest.mark.parametrize(
+    "expression,fault", _INSANE, ids=[fault for _, fault in _INSANE]
+)
+def test_a_miniscript_parse_refuses_is_refused_when_built(
+    expression: str, fault: str
+) -> None:
+    """In a tr() leaf and in a wsh(), with the refusal `parse` gives.
+
+    Built, the descriptor would not parse back from its own text. Issue
+    btclib-org/bip32-descriptors#85.
+    """
+    tapscript = expression.format(_X2)
+    p2wsh = expression.format(_C2)
+    leaf = miniscript.parse(tapscript, miniscript.TAPSCRIPT)
+    node = miniscript.parse(p2wsh)
+    cases = [
+        (f"tr({_X},{{pk({_X2}),{tapscript}}})", lambda: TrDescriptor(_KEY, (_KEY2, leaf))),
+        (f"wsh({p2wsh})", lambda: WshDescriptor(MiniscriptDescriptor(node))),
+    ]
+    for text, build in cases:
+        with pytest.raises(BTClibValueError, match=f"{fault}$") as parsed:
+            parse(text)
+        with pytest.raises(BTClibValueError) as built:
+            build()
+        assert str(built.value) == str(parsed.value)
+
+
+@pytest.mark.parametrize(
+    "node,err_msg",
+    [
+        (
+            miniscript.Miniscript("pk_k", keys=(parse(f"pk({_C})").key_expressions)),
+            rf"^not a miniscript script: pk_k\({_C}\) is a K, not a B$",
+        ),
+        (
+            miniscript.Miniscript(
+                "and_b", subs=(miniscript.Miniscript("1"), miniscript.Miniscript("1"))
+            ),
+            "^ill-typed miniscript: and_b over ",
+        ),
+    ],
+    ids=["not-a-B", "ill-typed"],
+)
+def test_a_miniscript_that_is_no_script_is_refused_when_built(
+    node: miniscript.Miniscript, err_msg: str
+) -> None:
+    """What `miniscript.parse` refuses before any sanity is asked."""
+    with pytest.raises(BTClibValueError, match=err_msg):
+        MiniscriptDescriptor(node)
+
+
+def test_a_sane_miniscript_built_by_hand_parses_back() -> None:
+    """The control: the issue's leaf with two keys, and its p2wsh twin."""
+    leaf = miniscript.parse(f"and_v(v:pk({_X2}),pk({_X}))", miniscript.TAPSCRIPT)
+    tr = TrDescriptor(_KEY, leaf)
+    assert parse(str(tr)) == tr
+    wsh = WshDescriptor(
+        MiniscriptDescriptor(miniscript.parse(f"and_v(v:pk({_C2}),pk({_C}))"))
+    )
+    assert parse(str(wsh)) == wsh
+
+
+@pytest.mark.parametrize(
+    "template",
+    ["tr({0},and_v(v:pk({1}/*),pk({1}/1)))", "wsh(and_v(v:pk({1}/*),pk({1}/1)))"],
+    ids=["tr", "wsh"],
+)
+def test_at_index_refuses_an_index_where_a_key_repeats(template: str) -> None:
+    """The keys differ at index 0, where `parse` compares them, not at 1.
+
+    At index 1 both keys are ``/1``, and the script is malleable there.
+    """
+    descriptor = parse(template.format(_X, _XPUB))
+    for index in (0, 2):
+        assert parse(str(at_index(descriptor, index))) == at_index(descriptor, index)
+    with pytest.raises(
+        BTClibValueError, match="is not sane: it repeats a public key$"
+    ) as e:
+        at_index(descriptor, 1)
+    assert_secret_free(e.value, [_XPRV, bytes.fromhex(_RANDOM_HEX)])
+
+
+def test_normalized_refuses_what_repeats_a_key_once_derived() -> None:
+    """Two spellings of one key, one of them behind a hardened step.
+
+    Without `prv_keys` the hardened one is compared by its expression, so
+    `parse` reads the descriptor; normalized, both are the same xpub.
+    """
+    child = xpub_from_xprv(derive(_XPRV, "m/1h"))
+    descriptor = parse(f"wsh(and_v(v:pk({_XPUB}/1h/0),pk({child}/0)))")
+    prv_keys = {_XPUB: _XPRV}
+    with pytest.raises(
+        BTClibValueError, match="is not sane: it repeats a public key$"
+    ) as e:
+        normalized(descriptor, prv_keys)
+    assert_secret_free(e.value, [_XPRV, bytes.fromhex(_RANDOM_HEX)])
+
+
+def test_a_refusal_when_built_names_no_private_key() -> None:
+    """A leaf read from an xprv holds its xpub, which is what is named."""
+    prv_keys: dict[str, str] = {}
+    expression = f"and_v(v:pk({_XPRV}/1),pk({_XPRV}/1))"
+    leaf = miniscript.parse(expression, miniscript.TAPSCRIPT, prv_keys)
+    with pytest.raises(BTClibValueError, match=rf"pk\({_XPUB}/1\)\) is not sane") as e:
+        TrDescriptor(_KEY, leaf)
+    assert_secret_free(e.value, [_XPRV, bytes.fromhex(_RANDOM_HEX)])
 
 
 @pytest.mark.parametrize("sort", [False, True])

@@ -130,6 +130,7 @@ three tables BIP380's checksum is computed from, which is what `checksum`,
 
 from __future__ import annotations
 
+import itertools
 import operator
 import re
 from abc import ABC, abstractmethod
@@ -203,6 +204,7 @@ from bip32_descriptors.descriptors.miniscript import (
     Miniscript,
     SpendContext,
     _assert_sane,
+    _assert_sane_script,
     _has_raw_key_hash,
     _read_unclosed_multisig_keys,
     _script_number,
@@ -694,10 +696,17 @@ def _assert_tree(tree: DescriptorTree) -> None:
     tapscript context. Each node writes its keys in its own context, and
     BIP342 reads a 33-byte key as an unknown public key type, which any
     non-empty signature satisfies.
+
+    A miniscript leaf is then refused where `parse` would refuse it
+    without `prv_keys`, since the descriptor would not parse back from its
+    text. The leaves are checked once the walk is done, so that a node
+    of the wrong type or context is named before a leaf found not sane.
     """
-    stack: list[tuple[object, int]] = [(tree, 0)]
+    # each entry carries whether it is a node under a miniscript leaf
+    stack: list[tuple[object, int, bool]] = [(tree, 0, False)]
+    leaves: list[Miniscript] = []
     while stack:
-        node, depth = stack.pop()
+        node, depth, in_leaf = stack.pop()
         if isinstance(node, Miniscript):
             if node.context != miniscript.TAPSCRIPT:
                 # a hand-built context is any value, so only the library's
@@ -706,7 +715,9 @@ def _assert_tree(tree: DescriptorTree) -> None:
                 context = miniscript.P2WSH if known else "another context"
                 err_msg = f"not a tapscript node: {node.fragment} in {context}"
                 raise BTClibValueError(err_msg)
-            stack += [(sub, depth) for sub in node.subs]
+            if not in_leaf:
+                leaves.append(node)
+            stack += [(sub, depth, True) for sub in node.subs]
             continue
         if not isinstance(node, tuple):
             assert_type(node, _TREE_NODE_TYPES, "script tree node")
@@ -716,7 +727,9 @@ def _assert_tree(tree: DescriptorTree) -> None:
             raise BTClibTypeError(err_msg)
         if depth == MAX_TREE_DEPTH:
             raise BTClibValueError(f"script tree deeper than {MAX_TREE_DEPTH}")
-        stack += [(node[1], depth + 1), (node[0], depth + 1)]
+        stack += [(node[1], depth + 1, False), (node[0], depth + 1, False)]
+    for leaf in leaves:
+        _assert_sane_script(leaf)
 
 
 @dataclass(frozen=True)
@@ -1692,6 +1705,9 @@ class MiniscriptDescriptor(Descriptor):
     Unlike the others it does not satisfy: a miniscript satisfaction needs
     more than a mapping of public keys to signatures, so `satisfy` refuses
     and says so.
+
+    A miniscript `parse` refuses without `prv_keys` is refused when built,
+    since the descriptor would not parse back from its text.
     """
 
     node: Miniscript
@@ -1700,6 +1716,7 @@ class MiniscriptDescriptor(Descriptor):
     def __post_init__(self) -> None:
         super().__post_init__()
         assert_type(self.node, Miniscript, "miniscript")
+        _assert_sane_script(self.node)
 
     @override
     def __str__(self) -> str:
@@ -3280,7 +3297,10 @@ def normalized(descriptor: Descriptor, prv_keys: PrvKeys | None = None) -> Descr
     The private material is the caller's, as everywhere else here, and is
     needed for exactly the keys that have a hardened step to re-root at.
     Where one of those is missing this raises rather than handing back a
-    descriptor that quietly still needs a key.
+    descriptor that quietly still needs a key. It raises too where a
+    miniscript then names one key twice, as the descriptor is refused when
+    built: without `prv_keys` a key behind a hardened step is compared by
+    its expression, and normalized it is compared as the key it derives.
 
     The hardening symbol is `h` throughout the result, whichever was
     read: a normalized descriptor is a canonical spelling and not the one
@@ -3307,6 +3327,10 @@ def at_index(descriptor: Descriptor, index: int = 0) -> Descriptor:
     A descriptor with no wildcard comes back unchanged, index 0 being the
     only index it has; the participants of a ``musig()`` are walked too,
     the range being on either side of the aggregation and never on both.
+
+    An index at which a miniscript names one key twice is refused, as the
+    descriptor of that index is when built: its script is malleable there.
+    Bitcoin Core compares the keys at index 0 only.
     """
     descriptor._assert_index(index)
 
@@ -3638,7 +3662,11 @@ def _inferred_node(node: Miniscript, known: _Known) -> Miniscript | None:
 def _inferred_miniscript(
     script: bytes, context: str, known: _Known
 ) -> Miniscript | None:
-    """Return the sane miniscript a script is, None where it is none."""
+    """Return the sane, satisfiable miniscript a script is, None where none.
+
+    What a `MiniscriptDescriptor` holds: one of a miniscript that is not
+    satisfiable, which Core infers, is refused when built.
+    """
     tapscript = context == _P2TR
     held = known.by_x_only_hash if tapscript else known.by_hash
     # only what the script pushes: this runs once per leaf, whatever the
@@ -3655,7 +3683,8 @@ def _inferred_miniscript(
         node = _inferred_node(read, known)
     except BTClibValueError:
         return None
-    return node if node is not None and node.is_sane() else None
+    sane = node is not None and node.is_sane() and node.is_satisfiable
+    return node if sane else None
 
 
 def _inferred_leaf(script: bytes, known: _Known) -> DescriptorLeaf | None:
@@ -4314,30 +4343,29 @@ def _template_key(
     return KeyExpression(xkey=f"@{index}", wildcard=key.wildcard)
 
 
-def _skeleton_key(key: KeyExpression) -> KeyExpression:
-    """Return `key` with every wildcard, path and identity blanked out.
-
-    What is left is the shape alone: a plain key becomes the same stand-in
-    everywhere, and a ``musig()`` becomes one stand-in per participant, so
-    two structures compare equal exactly when they nest the same functions
-    over the same count of keys -- never mind which keys, and never mind
-    where either one's wildcard is.
-    """
-    if key.participants:
-        return KeyExpression(participants=tuple(map(_skeleton_key, key.participants)))
-    return KeyExpression(xkey="K")
-
-
 def _skeleton(descriptor: Descriptor) -> str:
-    """Return `descriptor` as text with every key replaced by the same stand-in.
+    """Return `descriptor` as text with every key replaced by a stand-in.
 
-    Two descriptors with the same skeleton agree on every function, every
-    threshold and the shape of every tree and every ``musig()`` -- on
-    everything but which keys they name and where each one's wildcard
-    sits, which is exactly what a receive and a change descriptor of one
-    account are allowed to differ on.
+    Every wildcard, path and identity is blanked out: a plain key becomes
+    the placeholder of its position among the keys, and a ``musig()`` one
+    placeholder per participant. Two descriptors with the same skeleton
+    agree on every function, every threshold and the shape of every tree
+    and every ``musig()`` -- on everything but which keys they name and
+    where each one's wildcard sits, which is exactly what a receive and a
+    change descriptor of one account are allowed to differ on.
+
+    One placeholder per position and not one for every key, since the
+    descriptor is built again: a miniscript naming one key twice is
+    refused as not sane.
     """
-    return str(_mapped_keys(descriptor, _skeleton_key))
+    positions = itertools.count()
+
+    def blanked(key: KeyExpression) -> KeyExpression:
+        if key.participants:
+            return KeyExpression(participants=tuple(map(blanked, key.participants)))
+        return KeyExpression(xkey=f"@{next(positions)}")
+
+    return str(_mapped_keys(descriptor, blanked))
 
 
 def _paired_chain_digits(

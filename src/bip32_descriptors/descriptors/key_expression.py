@@ -68,12 +68,12 @@ _FINGERPRINT = re.compile(r"[0-9a-fA-F]{8}")
 _HEX = re.compile(r"[0-9a-fA-F]*")
 # what `xkey` holds where it is no extended key: the stand-ins the
 # wallet-policy functions of `descriptors` write -- a BIP388 placeholder
-# alone, or with the chain suffix it is paired with, a musig() group of
-# them with that suffix, and the one key `_skeleton_key` writes everywhere
+# alone, or with the chain suffix it is paired with, and a musig() group
+# of them with that suffix
 _INDEX = r"(?:0|[1-9][0-9]*)"
 _CHAIN_SUFFIX = rf"(?:/\*\*|/<{_INDEX};{_INDEX}>/\*)"
 _PLACEHOLDER = re.compile(
-    rf"K|@{_INDEX}{_CHAIN_SUFFIX}?|musig\(@{_INDEX}(?:,@{_INDEX})*\){_CHAIN_SUFFIX}"
+    rf"@{_INDEX}{_CHAIN_SUFFIX}?|musig\(@{_INDEX}(?:,@{_INDEX})*\){_CHAIN_SUFFIX}"
 )
 # what `_split_arguments` stops at, compiled once here rather than
 # handed to `re.finditer` as a pattern string per call: the cache that

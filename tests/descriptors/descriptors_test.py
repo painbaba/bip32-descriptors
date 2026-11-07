@@ -4935,10 +4935,10 @@ def test_a_key_expression_refuses_what_is_no_xpub(xkey: str) -> None:
 def test_what_a_key_expression_xkey_holds() -> None:
     """A mainnet or testnet xpub, a placeholder, or nothing."""
     xpubs = (xpub_from_xprv(XPRV_ROOT), TESTNET_XPUB)
-    placeholders = ("K", "@0", "@12", "@0/**", "@3/<2;3>/*", "musig(@0,@1)/**")
+    placeholders = ("@0", "@12", "@0/**", "@3/<2;3>/*", "musig(@0,@1)/**")
     for xkey in (*xpubs, *placeholders, ""):
         assert KeyExpression(xkey=xkey).xkey == xkey
-    for near_miss in ("@01", "@0/*", "musig(@0,@1)", "k"):
+    for near_miss in ("@01", "@0/*", "musig(@0,@1)", "K"):
         with pytest.raises(BTClibValueError, match="^invalid xkey"):
             KeyExpression(xkey=near_miss)
     with pytest.raises(BTClibTypeError, match="^invalid xkey type: bytes$"):
