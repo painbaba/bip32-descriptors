@@ -713,8 +713,9 @@ def _assert_tree(tree: DescriptorTree) -> None:
         node, depth = stack.pop()
         if isinstance(node, Miniscript):
             if node.context != miniscript.TAPSCRIPT:
-                # a hand-built context is any value, so only the library's
-                # own is named, a refusal echoing no value it was given
+                # a node that skipped `Miniscript`'s own checks, as an
+                # unpickled one does, holds any context, so only the
+                # library's own is named, a refusal echoing no value it holds
                 known = node.context == miniscript.P2WSH
                 context = miniscript.P2WSH if known else "another context"
                 err_msg = f"not a tapscript node: {node.fragment} in {context}"

@@ -1158,24 +1158,37 @@ class Miniscript:
     def _assert_shape(self) -> None:
         """Refuse a node no fragment has the shape of.
 
-        The arity, the keys, the digest and the number: a caller building
-        a node by hand can get any of them wrong, and `parse` and
-        `from_script` leave some of them to it. Refused rather than typed
-        empty: an ill-*shaped* node is not an expression the rules have
-        anything to say about, where an ill-*typed* one is an expression
-        they refuse.
+        The context, the arity, the keys, the digest and the number: a
+        caller building a node by hand can get any of them wrong, and
+        `parse` and `from_script` leave some of them to it. Refused rather
+        than typed empty: an ill-*shaped* node is not an expression the
+        rules have anything to say about, where an ill-*typed* one is an
+        expression they refuse.
+
+        A fragment or a context given by hand is any value, so its refusal
+        names only the library's own.
         """
+        assert_type(self.context, str, "context")
+        if self.context not in (P2WSH, TAPSCRIPT):
+            err_msg = "unknown spend context"
+            err_msg += f"; it must be one of {sorted((P2WSH, TAPSCRIPT))}"
+            raise BTClibValueError(err_msg)
         fragment = self.fragment
         if fragment == "thresh":
             if not self.subs:
                 raise BTClibValueError("thresh() takes at least one subexpression")
         elif fragment not in _ARITY:
-            raise BTClibValueError(f"unknown miniscript fragment: {fragment}")
+            raise BTClibValueError("unknown miniscript fragment")
         elif len(self.subs) != _ARITY[fragment]:
             err_msg = (
                 f"{fragment} takes {_ARITY[fragment]} subexpressions, "
                 f"{len(self.subs)} given"
             )
+            raise BTClibValueError(err_msg)
+        # each node writes its keys in its own context, so a subexpression
+        # of the other one would put keys of the wrong size in the script
+        if any(sub.context != self.context for sub in self.subs):
+            err_msg = f"a subexpression of {fragment} is not in {self.context}"
             raise BTClibValueError(err_msg)
         self._assert_keys()
         if len(self.data) != _DATA_SIZE.get(fragment, 0):

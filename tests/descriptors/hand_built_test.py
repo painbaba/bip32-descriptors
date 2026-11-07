@@ -12,6 +12,7 @@ btclib-org/bip32-descriptors#46 and btclib-org/bip32-descriptors#103.
 
 from __future__ import annotations
 
+import pickle
 from dataclasses import fields, replace
 from typing import Any
 
@@ -125,18 +126,31 @@ def test_a_tr_miniscript_leaf_of_another_context_is_refused() -> None:
             TrDescriptor(_KEY, tree)
 
 
+def _with_context(node: miniscript.Miniscript, context: object) -> None:
+    """Give the node a context, as unpickling a stream holding it would.
+
+    Unpickling skips `Miniscript`'s own checks, which refuse a node of an
+    unknown context, or of a subexpression of another, when it is built.
+    """
+    object.__setattr__(node, "context", context)
+
+
+def _unpickled(node: miniscript.Miniscript) -> miniscript.Miniscript:
+    """Return a copy of the node, its subexpressions copied too."""
+    return pickle.loads(pickle.dumps(node))  # noqa: S301
+
+
 def test_a_tr_miniscript_leaf_holding_a_node_of_another_context_is_refused() -> None:
     """Each node writes its keys in its own context, whatever the root's."""
-    p2wsh = miniscript.parse(f"and_v(v:pk({_C}),older(1))", miniscript.P2WSH)
-    verify = p2wsh.subs[0]
-    older = miniscript.Miniscript("older", miniscript.TAPSCRIPT, threshold=1)
-    leaf = miniscript.Miniscript("and_v", miniscript.TAPSCRIPT, (verify, older))
+    expression = f"and_v(v:pk({_C}),older(1))"
+    leaf = _unpickled(miniscript.parse(expression, miniscript.TAPSCRIPT))
+    _with_context(leaf.subs[0], miniscript.P2WSH)
     with pytest.raises(BTClibValueError, match="^not a tapscript node: v: in P2WSH$"):
         TrDescriptor(_KEY, leaf)
 
 
-# a fixed random value in each shape a hand-built context can take, and
-# the spelling of it a refusal could print
+# a fixed random value in each shape an unpickled node's context can
+# take, and the spelling of it a refusal could print
 _UNKNOWN_CONTEXTS = [
     (770907403214864877517, "770907403214864877517"),
     (bytes.fromhex(_RANDOM_HEX), bytes.fromhex(_RANDOM_HEX)),
@@ -149,7 +163,8 @@ def test_a_tr_leaf_of_an_unknown_context_is_refused(
     context: Any, spelling: str | bytes
 ) -> None:
     """A context the library does not define is not echoed, being any value."""
-    leaf = replace(miniscript.parse("1", miniscript.TAPSCRIPT), context=context)
+    leaf = _unpickled(miniscript.parse("1", miniscript.TAPSCRIPT))
+    _with_context(leaf, context)
     err_msg = "^not a tapscript node: 1 in another context$"
     with pytest.raises(BTClibValueError, match=err_msg) as e:
         TrDescriptor(_KEY, leaf)
