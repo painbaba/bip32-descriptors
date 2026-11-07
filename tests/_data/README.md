@@ -428,6 +428,12 @@ private form alone, which are `HARDENED_PUBLIC` there, and the `rawtr()`
 cases. BIP394 publishes the one whose key is a WIF, as its second
 vector; the ranged one, under an xprv, is Core's own.
 
+`tests/descriptors/unused_test.py` holds every case of the
+`unused_descriptor_test` case, transcribed from the file at that commit:
+its `CheckUnused` cases as `CORE_UNUSED`, and its `CheckUnparsable` and
+`CheckSingleUnparsable` cases as `CORE_UNPARSABLE`, with the messages
+`parse` gives.
+
 Not vendored as a file because there is no file: the values are literals
 in C++ source, so a copy of it would be a copy of a test program. What
 this pin buys instead is the upstream re-check: a case added to that

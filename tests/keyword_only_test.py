@@ -91,6 +91,7 @@ KEYWORD_ONLY: dict[str, list[str]] = {
     "bip32_descriptors.descriptors:RawTrDescriptor.__init__": ["network"],
     "bip32_descriptors.descriptors:ShDescriptor.__init__": ["network"],
     "bip32_descriptors.descriptors:TrDescriptor.__init__": ["network"],
+    "bip32_descriptors.descriptors:UnusedDescriptor.__init__": ["network"],
     "bip32_descriptors.descriptors:WpkhDescriptor.__init__": ["network"],
     "bip32_descriptors.descriptors:WshDescriptor.__init__": ["network"],
 }

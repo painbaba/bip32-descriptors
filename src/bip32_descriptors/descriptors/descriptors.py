@@ -40,6 +40,8 @@ The grammar read is BIP380 to BIP390:
 - ``tr``, with a key path and a script tree whose leaves are ``pk()``,
   ``multi_a()`` and ``sortedmulti_a()`` (BIP386, BIP387)
 - ``rawtr`` (BIP394), whose key is the output key itself
+- ``unused``, which no BIP specifies: Bitcoin Core's bitcoin/bitcoin#29136,
+  a key and no script
 - ``rawnode``, ``rawleaf`` and ``rawpkh``, which no BIP specifies, and
   ``raw`` inside ``sh()``, ``wsh()`` and a ``tr()`` tree: they let a
   descriptor say what it knows of an output it knows in part. Bitcoin
@@ -245,6 +247,7 @@ __all__ = [
     "RawTrDescriptor",
     "ShDescriptor",
     "TrDescriptor",
+    "UnusedDescriptor",
     "WpkhDescriptor",
     "WshDescriptor",
     "add_checksum",
@@ -1149,8 +1152,8 @@ class Descriptor(ABC):
     ) -> list[ScriptPubKey]:
         """Return the scripts the descriptor describes at `index`.
 
-        A list because ``combo()`` is a set of scripts and not one
-        script; every other fragment answers with exactly one.
+        A list because ``combo()`` is a set of scripts and ``unused()``
+        has none; every other fragment answers with exactly one.
         """
         _assert_prv_keys(prv_keys)
         self._assert_index(index)
@@ -1384,8 +1387,8 @@ class Descriptor(ABC):
         `Expansion` says which field holds what.
 
         What it does not hold is what a descriptor does not know: the
-        utxo, the sighash type, the signatures. ``combo()``, ``addr()``,
-        ``raw()`` and ``rawpkh()`` refuse, each saying why.
+        utxo, the sighash type, the signatures. A fragment with nothing of
+        this to give refuses, saying why.
         """
         _assert_prv_keys(prv_keys)
         self._assert_index(index)
@@ -2479,6 +2482,59 @@ class RawTrDescriptor(Descriptor):
         )
 
 
+@dataclass(frozen=True)
+class UnusedDescriptor(Descriptor):
+    """``unused(KEY)``: a key and no script, no BIP.
+
+    Bitcoin Core's, from bitcoin/bitcoin#29136: a wallet holds the key
+    without watching any script for it. At the top level only, and of a
+    key that is not ranged.
+
+    `script_pub_keys` and `addresses` answer an empty list, and the
+    provider holds the key and its origin, as Core's ``Expand`` does.
+    """
+
+    key: KeyExpression
+
+    @override
+    def __post_init__(self) -> None:
+        super().__post_init__()
+        assert_type(self.key, KeyExpression, "key")
+
+    @override
+    def __str__(self) -> str:
+        return _expression("unused", str(self.key))
+
+    @property
+    @override
+    def key_expressions(self) -> tuple[KeyExpression, ...]:
+        """Return the one KEY expression, as the base class's tuple."""
+        return (self.key,)
+
+    @override
+    def _scripts(self, index: int, prv_keys: PrvKeys | None) -> list[bytes]:
+        # the key is derived and no script made of it, as in Core, which
+        # refuses a key that cannot derive here too
+        self.key.sec(index, self.network, prv_keys)
+        return []
+
+    @override
+    def _satisfy(
+        self,
+        signatures: Mapping[bytes, bytes],
+        index: int,
+        prv_keys: PrvKeys | None,
+        spend: SpendContext | None,
+    ) -> tuple[bytes, Witness]:
+        """Refuse: there is no script to spend."""
+        raise BTClibValueError("unused() cannot be satisfied: it has no script")
+
+    @override
+    def _expansion(self, index: int, prv_keys: PrvKeys | None) -> Expansion:
+        """Refuse: no output or input of a psbt is this descriptor's."""
+        raise BTClibValueError("unused() cannot update a psbt: it has no script")
+
+
 def _assert_position(name: str, context: str, allowed: tuple[str, ...]) -> None:
     if context not in allowed:
         raise BTClibValueError(f"{name}() is not allowed inside {context}")
@@ -2902,6 +2958,21 @@ def _parse_rawtr(
     return RawTrDescriptor(key, network=network)
 
 
+def _parse_unused(
+    args: list[str], context: str, network: str, prv_keys: dict[str, str]
+) -> Descriptor:
+    key = _parse_key(
+        _one_argument(args, "unused"),
+        prv_keys,
+        x_only=False,
+        compressed=False,
+        musig_allowed=False,
+    )
+    if key.is_ranged:
+        raise BTClibValueError("unused(): key cannot be ranged")
+    return UnusedDescriptor(key, network=network)
+
+
 def _parse_addr(
     args: list[str], context: str, network: str, prv_keys: dict[str, str]
 ) -> Descriptor:
@@ -3040,6 +3111,7 @@ _PARSERS: dict[
     "sortedmulti": ((_TOP, _P2SH, _P2WSH), _parse_sorted_multi),
     "tr": ((_TOP,), _parse_tr),
     "rawtr": ((_TOP,), _parse_rawtr),
+    "unused": ((_TOP,), _parse_unused),
     "addr": ((_TOP,), _parse_addr),
     # inside tr() it is a leaf of a tree and `_parse_leaf` reads it
     "raw": ((_TOP, _P2SH, _P2WSH, _P2TR), _parse_raw),
@@ -4298,9 +4370,9 @@ def _assert_policy_top_level(descriptor: Descriptor) -> None:
     BIP388 allows at the top level, the miniscript templates it also lists
     living inside ``wsh`` or ``tr`` only; ``multi``/``sortedmulti`` are
     SCRIPT functions too, inside ``sh`` or ``wsh`` only, so a top-level one
-    is refused. ``combo``, ``addr``, ``raw``, ``rawpkh``, a bare ``pk`` and
-    Core's own ``rawtr`` extension are not BIP388's, and none of them is a
-    policy an external signer's registration flow reads.
+    is refused. Every other top-level function, a bare ``pk`` among them,
+    is not BIP388's, and none of them is a policy an external signer's
+    registration flow reads.
     Two nestings are checked here: a ``pk()`` directly inside ``sh()``, a
     miniscript where BIP388 allows ``wsh`` or ``tr`` only; and the
     functions that take a script or a node as bytes -- ``raw()`` and

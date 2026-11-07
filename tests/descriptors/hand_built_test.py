@@ -35,6 +35,7 @@ from bip32_descriptors.descriptors.descriptors import (
     RawTrDescriptor,
     ShDescriptor,
     TrDescriptor,
+    UnusedDescriptor,
     WpkhDescriptor,
     WshDescriptor,
 )
@@ -226,6 +227,7 @@ _PARSED: dict[type[Descriptor], Descriptor] = {
         parse(f"rawpkh({'00' * 20})"),
         parse(f"tr({_X})"),
         parse(f"rawtr({_X})"),
+        parse(f"unused({_K})"),
     )
 }
 _KEY_FIELD_CLASSES = (
@@ -234,6 +236,7 @@ _KEY_FIELD_CLASSES = (
     WpkhDescriptor,
     ComboDescriptor,
     RawTrDescriptor,
+    UnusedDescriptor,
 )
 # (fragment, field, a value of the wrong type, the name the refusal gives)
 _WRONG: list[tuple[type[Descriptor], str, Any, str]] = [
