@@ -1989,6 +1989,16 @@ class _CoreFallbackError(BTClibValueError):
     """
 
 
+class _TypeFaultError(BTClibValueError):
+    """A miniscript the type system refuses, or one that is not a "B".
+
+    Core's parser builds such a miniscript from its text all the same, so
+    where Core's descriptor reader allows no miniscript it names the
+    position instead, which the descriptor reader here names too. The
+    standalone parser keeps this diagnostic.
+    """
+
+
 def _expression_end(text: str, pos: int, *, stop_at_close: bool) -> int:
     """Return the index one past the expression starting at `pos`.
 
@@ -2106,7 +2116,7 @@ def _assert_typed(node: Miniscript) -> Miniscript:
     if not node.properties:
         arguments = ", ".join("".join(sorted(sub.properties)) for sub in node.subs)
         err_msg = f"ill-typed miniscript: {node.fragment} over {arguments}"
-        raise BTClibValueError(err_msg)
+        raise _TypeFaultError(err_msg)
     return _assert_fits(node)
 
 
@@ -2644,7 +2654,7 @@ def parse(
     if not _has(node.properties, "B"):
         basic = "".join(sorted(node.properties & _t("BVKW")))
         err_msg = f"not a miniscript script: {node} is a {basic}, not a B"
-        raise BTClibValueError(err_msg)
+        raise _TypeFaultError(err_msg)
     return node
 
 

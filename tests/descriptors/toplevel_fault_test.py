@@ -4,13 +4,15 @@
 
 """Expressions no descriptor function takes, at the top level and in sh().
 
-Issues btclib-org/bip32-descriptors#14 and btclib-org/bip32-descriptors#118.
-Core is the release `integration-bitcoind.yml` pins. Its ``ParseScript``
-reads such an expression as a tapscript miniscript in every position. Its
-``Func`` takes a name only where the text ends in ")", so a whole
-descriptor followed by a "}" is such an expression too. What Core names
-for each descriptor here is what getdescriptorinfo answered on an offline
-node.
+Issues btclib-org/bip32-descriptors#14, btclib-org/bip32-descriptors#118
+and btclib-org/bip32-descriptors#128. Core is the release
+`integration-bitcoind.yml` pins. Its ``ParseScript`` reads such an
+expression as a tapscript miniscript in every position. Its miniscript
+parser builds a miniscript whatever its type, so a type fault comes after
+the position. Its ``Func`` takes a name only where the text ends in ")",
+so a whole descriptor followed by a "}" is such an expression too. What
+Core names for each descriptor here is what getdescriptorinfo answered on
+an offline node.
 """
 
 import pytest
@@ -32,7 +34,7 @@ WIF = wif_from_prv_key(
 )
 XPRV = rootxprv_from_seed("1f2e3d4c" * 8)
 
-# miniscripts Core's tapscript parser reads, sane or not
+# miniscripts Core's tapscript parser reads, of any type, sane or not
 MINISCRIPTS = [
     f"and_v(v:pk({K}),pk({K2}))",
     f"and_v(v:pk({X}),pk({X2}))",
@@ -44,6 +46,13 @@ MINISCRIPTS = [
     "older(1)",
     "0",
     "1",
+    f"and_v(pk({K}),pk({K2}))",
+    f"and_v(v:pk({K}),and_v(pk({K2}),pk({K})))",
+    f"or_b(pk({K}),pk({K2}))",
+    f"thresh(1,pk({K}),pk({K2}))",
+    f"v:pk({K})",
+    f"pk_h({K})",
+    f"a:pk({K})",
 ]
 
 # expressions Core's tapscript parser fails on without naming a key
@@ -58,8 +67,13 @@ NO_FUNCTIONS = [
     f"q:pk({K})",
     f"thresh(2,pk({K}))",
     f"and_v(v:pk({K}),foo(1))",
+    f"and_v(and_v(pk({K}),pk({K2})),foo(1))",
+    f"thresh(2,and_v(pk({K}),pk({K2})))",
+    f"and_v(and_v(pk({K}),pk({K2})),multi(1,{K}))",
     f"and_v(v:pk({K}),multi(1,{K2}))",
     f"and_v(v:pk({K}),pk({K2}))x",
+    f"and_v(pk({K}),pk({K2}))x",
+    f"v:pk({K})x",
     f"and_v(v:pk({K}),pk(zz)x)",
     "0x",
     f"multi(1,[dead]]{K})junk",
@@ -120,6 +134,9 @@ def test_text_after_a_whole_descriptor_is_the_top_level_fallback(
     [
         (f"and_v(v:pk(zz),pk({K}))", "^invalid key expression$"),
         (f"sh(and_v(v:pk(zz),pk({K})))", "^invalid key expression$"),
+        (f"and_v(and_v(pk({K}),pk({K2})),pk(zz))", "^invalid key expression$"),
+        (f"sh(and_v(and_v(pk({K}),pk({K2})),pk(zz)))", "^invalid key expression$"),
+        ("v:pk(zz)", "^invalid key expression$"),
         (
             f"multi_a(1,[dead]]{X})x",
             r"^more than one '\]' in a single key expression$",
@@ -136,10 +153,13 @@ def test_a_key_core_refuses_is_the_fault(descriptor: str, message: str) -> None:
         parse(descriptor)
 
 
-def test_a_comma_inside_sh_ends_the_miniscript_core_refuses() -> None:
+@pytest.mark.parametrize(
+    "expression", [f"and_v(v:pk({K}),pk({K2}))", f"and_v(pk({K}),pk({K2}))"]
+)
+def test_a_comma_inside_sh_ends_the_miniscript_core_refuses(expression: str) -> None:
     """Core reads the miniscript before the comma, and refuses it there."""
     with pytest.raises(BTClibValueError, match=MINISCRIPT_OUTSIDE):
-        parse(f"sh(and_v(v:pk({K}),pk({K2})),{K})")
+        parse(f"sh({expression},{K})")
 
 
 def test_multipath_descriptors_names_the_same_fault() -> None:
@@ -167,6 +187,10 @@ def test_multipath_descriptors_names_the_same_fault() -> None:
         (f"sh(pk({WIF})x)", P2SH_FAULT),
         (f"and_v(v:pk({XPRV}/0),pk({WIF}))", MINISCRIPT_OUTSIDE),
         (f"sh(and_v(v:pk({XPRV}/0),pk({WIF})))", MINISCRIPT_OUTSIDE),
+        (f"and_v(pk({WIF}),pk({XPRV}/0))", MINISCRIPT_OUTSIDE),
+        (f"sh(and_v(pk({XPRV}/0),pk({WIF})))", MINISCRIPT_OUTSIDE),
+        (f"v:pk({XPRV}/0)", MINISCRIPT_OUTSIDE),
+        (f"sh(pk_h({WIF}))", MINISCRIPT_OUTSIDE),
     ],
 )
 def test_the_refusal_leaves_the_expression_out(descriptor: str, message: str) -> None:

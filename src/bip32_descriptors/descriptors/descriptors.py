@@ -3080,6 +3080,8 @@ _NOT_A_FUNCTION = {
     _TOP: "top-level expression is not a valid descriptor function",
     _P2SH: "A function is needed within P2SH",
 }
+# and what it names there for a miniscript it reads
+_MINISCRIPT_OUTSIDE = "Miniscript expressions can only be used in wsh or tr."
 
 
 def _parse_no_function(
@@ -3089,11 +3091,9 @@ def _parse_no_function(
 
     At the top level and inside ``sh()``, Core reads the expression as a
     tapscript miniscript too. It names a key it refuses. It refuses a
-    miniscript it reads, sane or not, as one written outside ``wsh()`` and
-    ``tr()``. Otherwise it names its fallback for the position.
-
-    A miniscript the type system refuses is refused here with the
-    miniscript parser's message, where Core names the position.
+    miniscript it reads, of any type, sane or not, as one written outside
+    ``wsh()`` and ``tr()``. Otherwise it names its fallback for the
+    position.
     """
     if context in _MINISCRIPT_CONTEXTS:
         return _parse_miniscript_expression(expression, context, network, prv_keys)
@@ -3105,7 +3105,9 @@ def _parse_no_function(
         )
     except miniscript._CoreFallbackError as error:
         raise BTClibValueError(_NOT_A_FUNCTION[context]) from error
-    raise BTClibValueError("Miniscript expressions can only be used in wsh or tr.")
+    except miniscript._TypeFaultError as error:
+        raise BTClibValueError(_MINISCRIPT_OUTSIDE) from error
+    raise BTClibValueError(_MINISCRIPT_OUTSIDE)
 
 
 def _parse_expression(

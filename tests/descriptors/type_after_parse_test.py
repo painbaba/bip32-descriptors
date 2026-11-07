@@ -10,7 +10,7 @@ fragment whatever its type, and its descriptor reader refuses an
 ill-typed one only once the parser has finished. So a fault that stops
 the parser is what Core names, even after an ill-typed subexpression:
 its fallback inside wsh() or a tr() leaf, or the key it refuses. Where
-the type is the only fault, parse names the innermost ill-typed
+the type is the only fault there, parse names the innermost ill-typed
 fragment. What Core names for each descriptor here is what
 getdescriptorinfo answered on an offline node.
 """
